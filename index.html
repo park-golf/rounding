@@ -481,6 +481,15 @@
   table.score-table td.editable-cell:active{
     background:var(--orange-light);
   }
+  table.score-table th.editable-name{
+    cursor:pointer;
+    text-decoration:underline;
+    text-decoration-style:dotted;
+    text-underline-offset:3px;
+  }
+  table.score-table th.editable-name:active{
+    background:var(--forest-2);
+  }
   .fab-wrap{
     position:fixed;
     left:0; right:0;
@@ -508,6 +517,20 @@
   }
   .fab-share:active{ background:#e35a26; }
   .calendar-wrap{ width:100%; }
+  .cal-toggle{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    cursor:pointer;
+    margin:0;
+  }
+  .cal-toggle-arrow{
+    font-size:14px;
+    color:var(--forest);
+    font-weight:800;
+    flex-shrink:0;
+    margin-left:10px;
+  }
   .cal-header{
     display:flex;
     align-items:center;
@@ -582,6 +605,17 @@
     <div style="display:flex; gap:10px; margin-top:20px;">
       <button class="btn btn-secondary" id="editCancel">취소</button>
       <button class="btn btn-primary" id="editSave">저장</button>
+    </div>
+  </div>
+</div>
+<div class="edit-overlay" id="editNameOverlay">
+  <div class="edit-modal">
+    <div class="edit-title" id="editNameTitle"></div>
+    <input type="text" id="editNameInput" maxlength="8"
+      style="width:100%; height:52px; border-radius:12px; border:2px solid var(--line); padding:0 14px; font-size:18px; font-weight:700; text-align:center; font-family:inherit; color:var(--ink); background:var(--cream);">
+    <div style="display:flex; gap:10px; margin-top:20px;">
+      <button class="btn btn-secondary" id="editNameCancel">취소</button>
+      <button class="btn btn-primary" id="editNameSave">저장</button>
     </div>
   </div>
 </div>
@@ -679,6 +713,7 @@ let state = {
   activeTab: null,
   takenGroups: [],
   datesWithData: [],
+  calendarOpen: false,
   calendarYear: parseInt(todayISO().split('-')[0], 10),
   calendarMonth: parseInt(todayISO().split('-')[1], 10) - 1
 };
@@ -855,9 +890,61 @@ function bindEditModal(){
   });
 }
 
+let editNameCtx = null;
+function openEditName(groupNum, playerIdx){
+  const rec = state.groupsData.find(r=>r.groupNum===groupNum);
+  if(!rec) return;
+  editNameCtx = { groupNum, playerIdx };
+  document.getElementById('editNameTitle').textContent = `${groupNum}조 · 플레이어 이름 수정`;
+  const input = document.getElementById('editNameInput');
+  input.value = rec.players[playerIdx];
+  document.getElementById('editNameOverlay').classList.add('show');
+  setTimeout(()=>{ input.focus(); input.select(); }, 50);
+}
+function closeEditName(){
+  editNameCtx = null;
+  document.getElementById('editNameOverlay').classList.remove('show');
+}
+function bindEditNameModal(){
+  document.getElementById('editNameCancel').addEventListener('click', closeEditName);
+  document.getElementById('editNameSave').addEventListener('click', async ()=>{
+    if(!editNameCtx) return;
+    const ctx = editNameCtx;
+    const rec = state.groupsData.find(r=>r.groupNum===ctx.groupNum);
+    if(!rec){ closeEditName(); return; }
+    const newName = document.getElementById('editNameInput').value.trim();
+    if(!newName){
+      showToast('이름을 입력해주세요.');
+      return;
+    }
+    rec.players[ctx.playerIdx] = newName;
+    state.aggregated = aggregateRanking(state.groupsData);
+    closeEditName();
+    render();
+    const saveObj = {
+      date: rec.date || state.date,
+      groupNum: rec.groupNum,
+      players: rec.players,
+      numPlayers: rec.numPlayers,
+      holeType: rec.holeType,
+      scoresJson: JSON.stringify(rec.scores),
+      savedAt: Date.now()
+    };
+    try{
+      await waitForFirebase();
+      await window.__fbSaveGroup(saveObj);
+      showToast('이름이 저장됐어요 ✅');
+    }catch(e){
+      console.error(e);
+      showToast('저장에 실패했어요. 인터넷 연결을 확인해주세요.');
+    }
+  });
+}
+
 function renderGroupTable(rec){
   const secs = SECTION_LABELS[rec.holeType];
-  let thead = `<tr><th></th>${rec.players.map(n=>`<th>${n}</th>`).join('')}</tr>`;
+  let thead = `<tr><th></th>${rec.players.map((n,i)=>
+    `<th class="editable-name" data-group="${rec.groupNum}" data-p="${i}">${n}</th>`).join('')}</tr>`;
   let tbody = '';
   secs.forEach(s=>{
     for(let h=0; h<9; h++){
@@ -881,16 +968,56 @@ function formatDateShort(){
   return `${y}.${m}.${d}`;
 }
 
+function lastSectionLabel(){
+  if(state.groupsData.length){
+    const secs = SECTION_LABELS[state.groupsData[0].holeType];
+    return secs[secs.length-1];
+  }
+  return 'B';
+}
+
+// 총 타수가 같은 선수들 사이에서, 순위가 갈린 결정적 기준을 계산해서
+// { 배열인덱스: "C합계 15타" 또는 "C9홀 4타" 같은 문구 } 형태로 반환
+function computeTieAnnotations(list){
+  const label = lastSectionLabel();
+  const ann = {};
+  let i = 0;
+  while(i < list.length){
+    let j = i;
+    while(j+1 < list.length && list[j+1].total === list[i].total) j++;
+    if(j > i){
+      const group = list.slice(i, j+1);
+      const totalsSame = group.every(p=>p.lastTotal === group[0].lastTotal);
+      if(!totalsSame){
+        group.forEach((p, idx)=>{ ann[i+idx] = `${label}합계 ${p.lastTotal}타`; });
+      } else {
+        let foundH = -1;
+        for(let h=8; h>=0; h--){
+          const vals = group.map(p=>p.lastHoles[h]);
+          if(new Set(vals).size > 1){ foundH = h; break; }
+        }
+        if(foundH >= 0){
+          group.forEach((p, idx)=>{ ann[i+idx] = `${label}${foundH+1}홀 ${p.lastHoles[foundH]}타`; });
+        }
+      }
+    }
+    i = j+1;
+  }
+  return ann;
+}
+
 function buildShareText(){
   let text = `⛳ ${formatDateTitle()}\n\n`;
   const medals = {1:'🥇',2:'🥈',3:'🥉'};
   if(state.aggregated.length===0){
     text += '아직 등록된 스코어가 없습니다.\n';
   } else {
-    state.aggregated.forEach(p=>{
+    const tieAnn = computeTieAnnotations(state.aggregated);
+    state.aggregated.forEach((p, idx)=>{
       const medal = medals[p.rank] || `${p.rank}등`;
       const tie = (state.aggregated.filter(x=>x.rank===p.rank).length>1) ? '(공동)' : '';
-      text += `${medal}${tie} ${p.name} - ${p.total}타 (${p.rounds}라운드)\n`;
+      const reason = tieAnn[idx] ? ` (${tieAnn[idx]})` : '';
+      text += `${medal}${tie} ${p.name} - ${p.total}타${reason}\n`;
     });
   }
   text += `\n[조별 참여 현황]\n`;
@@ -979,11 +1106,14 @@ function renderStepDate(){
         <input type="date" id="dateInput" value="${state.date}">
         <div class="date-preview">${y}년 ${parseInt(m,10)}월 ${parseInt(d,10)}일</div>
       </div>
-      <div class="card">
-        <div class="section-title">🗓️ 캘린더 <span style="font-weight:500; font-size:12px; color:var(--gray);">(빨간 점 = 데이터 등록된 날짜)</span></div>
-        ${renderCalendar()}
-      </div>
       <button class="btn btn-secondary" id="viewResultsBtn" style="width:100%; height:52px; font-size:16px;">📊 이 날짜 결과 보기</button>
+      <div class="card" style="margin-top:16px;">
+        <div class="section-title cal-toggle" id="calToggle">
+          <span>🗓️ 캘린더 <span style="font-weight:500; font-size:12px; color:var(--gray);">(빨간 점 = 데이터 있음)</span></span>
+          <span class="cal-toggle-arrow">${state.calendarOpen ? '▲' : '▼'}</span>
+        </div>
+        ${state.calendarOpen ? `<div style="margin-top:14px;">${renderCalendar()}</div>` : ''}
+      </div>
     </div>
     <div class="navbar">
       <button class="btn btn-primary" id="toStep2">다음</button>
@@ -1166,15 +1296,17 @@ function renderStepResults(){
   if(state.aggregated.length===0){
     rankHtml = `<div class="empty-note">데이터를 불러오지 못했어요. 새로고침을 눌러주세요.</div>`;
   } else {
-    rankHtml = state.aggregated.map(p=>{
+    const tieAnn = computeTieAnnotations(state.aggregated);
+    rankHtml = state.aggregated.map((p, idx)=>{
       const tie = state.aggregated.filter(x=>x.rank===p.rank).length>1;
       const medalIcon = {1:'🥇',2:'🥈',3:'🥉'}[p.rank] || p.rank;
+      const reason = tieAnn[idx] ? ` <span style="color:var(--orange);">(${tieAnn[idx]})</span>` : '';
       return `
       <div class="rank-item ${p.rank===1?'first':''}">
         <div class="rank-medal" style="background:${medalColor[p.rank]||'#9AA79C'}">${medalIcon}</div>
         <div class="rank-info">
           <div class="name">${tie?'공동 ':''}${p.rank}등 · ${p.name}</div>
-          <div class="score">${p.groups.join(' · ')}</div>
+          <div class="score">${p.groups.join(' · ')}${reason}</div>
         </div>
         <div class="rank-total">${p.total}<span>타</span></div>
       </div>`;
@@ -1208,7 +1340,7 @@ function renderStepResults(){
         <div class="share-hint">표의 타수 숫자를 누르면 바로 수정할 수 있어요 · 같은 날짜로 다른 조가 입력하면 순위가 자동으로 합산돼요</div>
       </div>
     </div>
-    <div class="fab-wrap"><button class="fab-share" id="shareBtn" title="카카오톡 공유">📤</button></div>
+    <div class="fab-wrap"><button class="fab-share" id="shareBtn" title="결과 복사하기">📋</button></div>
     <div class="navbar">
       <button class="btn btn-secondary" id="goHome">🏠 처음 화면</button>
       <button class="btn btn-primary" id="addGroup">다른 조 입력</button>
@@ -1228,16 +1360,29 @@ function attachHandlers(){
       }
       render();
     });
-    document.getElementById('calPrev').addEventListener('click', ()=>{
-      state.calendarMonth--;
-      if(state.calendarMonth < 0){ state.calendarMonth = 11; state.calendarYear--; }
-      render();
-    });
-    document.getElementById('calNext').addEventListener('click', ()=>{
-      state.calendarMonth++;
-      if(state.calendarMonth > 11){ state.calendarMonth = 0; state.calendarYear++; }
-      render();
-    });
+    const calToggle = document.getElementById('calToggle');
+    if(calToggle){
+      calToggle.addEventListener('click', ()=>{
+        state.calendarOpen = !state.calendarOpen;
+        render();
+      });
+    }
+    const calPrev = document.getElementById('calPrev');
+    if(calPrev){
+      calPrev.addEventListener('click', ()=>{
+        state.calendarMonth--;
+        if(state.calendarMonth < 0){ state.calendarMonth = 11; state.calendarYear--; }
+        render();
+      });
+    }
+    const calNext = document.getElementById('calNext');
+    if(calNext){
+      calNext.addEventListener('click', ()=>{
+        state.calendarMonth++;
+        if(state.calendarMonth > 11){ state.calendarMonth = 0; state.calendarYear++; }
+        render();
+      });
+    }
     document.querySelectorAll('.cal-cell[data-date]').forEach(cell=>{
       cell.addEventListener('click', ()=>{
         state.date = cell.dataset.date;
@@ -1404,10 +1549,16 @@ function attachHandlers(){
         openEditCell(+td.dataset.group, td.dataset.section, +td.dataset.hole, +td.dataset.p);
       });
     });
+    document.querySelectorAll('.editable-name').forEach(th=>{
+      th.addEventListener('click', ()=>{
+        openEditName(+th.dataset.group, +th.dataset.p);
+      });
+    });
   }
 }
 
 bindEditModal();
+bindEditNameModal();
 render();
 refreshDatesWithData();
 </script>
