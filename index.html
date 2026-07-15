@@ -343,6 +343,12 @@
   .rank-info{ flex:1; }
   .rank-info .name{ font-size:17px; font-weight:800; color:var(--ink); }
   .rank-info .score{ font-size:12.5px; color:var(--gray); font-weight:600; margin-top:2px;}
+  .tie-reason{
+    font-size:12px;
+    color:var(--orange);
+    font-weight:700;
+    margin-top:3px;
+  }
   .rank-total{ font-size:22px; font-weight:900; color:var(--forest); }
   .rank-total span{ font-size:12px; font-weight:600; color:var(--gray); }
   .tabs{
@@ -977,7 +983,7 @@ function lastSectionLabel(){
 }
 
 // 총 타수가 같은 선수들 사이에서, 순위가 갈린 결정적 기준을 계산해서
-// { 배열인덱스: "C합계 15타" 또는 "C9홀 4타" 같은 문구 } 형태로 반환
+// "C합계 15타" 또는 "C합계 15타 / C9홀 4타" 같은 문구로 반환
 function computeTieAnnotations(list){
   const label = lastSectionLabel();
   const ann = {};
@@ -997,7 +1003,9 @@ function computeTieAnnotations(list){
           if(new Set(vals).size > 1){ foundH = h; break; }
         }
         if(foundH >= 0){
-          group.forEach((p, idx)=>{ ann[i+idx] = `${label}${foundH+1}홀 ${p.lastHoles[foundH]}타`; });
+          group.forEach((p, idx)=>{
+            ann[i+idx] = `${label}합계 ${p.lastTotal}타 / ${label}${foundH+1}홀 ${p.lastHoles[foundH]}타`;
+          });
         }
       }
     }
@@ -1016,8 +1024,8 @@ function buildShareText(){
     state.aggregated.forEach((p, idx)=>{
       const medal = medals[p.rank] || `${p.rank}등`;
       const tie = (state.aggregated.filter(x=>x.rank===p.rank).length>1) ? '(공동)' : '';
-      const reason = tieAnn[idx] ? ` (${tieAnn[idx]})` : '';
-      text += `${medal}${tie} ${p.name} - ${p.total}타${reason}\n`;
+      text += `${medal}${tie} ${p.name} - ${p.total}타\n`;
+      if(tieAnn[idx]) text += `   (${tieAnn[idx]})\n`;
     });
   }
   text += `\n[조별 참여 현황]\n`;
@@ -1300,13 +1308,14 @@ function renderStepResults(){
     rankHtml = state.aggregated.map((p, idx)=>{
       const tie = state.aggregated.filter(x=>x.rank===p.rank).length>1;
       const medalIcon = {1:'🥇',2:'🥈',3:'🥉'}[p.rank] || p.rank;
-      const reason = tieAnn[idx] ? ` <span style="color:var(--orange);">(${tieAnn[idx]})</span>` : '';
+      const reasonLine = tieAnn[idx] ? `<div class="tie-reason">(${tieAnn[idx]})</div>` : '';
       return `
       <div class="rank-item ${p.rank===1?'first':''}">
         <div class="rank-medal" style="background:${medalColor[p.rank]||'#9AA79C'}">${medalIcon}</div>
         <div class="rank-info">
           <div class="name">${tie?'공동 ':''}${p.rank}등 · ${p.name}</div>
-          <div class="score">${p.groups.join(' · ')}${reason}</div>
+          <div class="score">${p.groups.join(' · ')}</div>
+          ${reasonLine}
         </div>
         <div class="rank-total">${p.total}<span>타</span></div>
       </div>`;
