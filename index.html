@@ -678,6 +678,17 @@
     </div>
   </div>
 </div>
+<div class="edit-overlay" id="adminOverlay">
+  <div class="edit-modal">
+    <div class="edit-title">🛡️ 관리자 인증</div>
+    <input type="password" id="adminPinInput" inputmode="numeric" maxlength="4" placeholder="4자리 번호"
+      style="width:100%; height:56px; border-radius:12px; border:2px solid var(--line); text-align:center; font-size:26px; letter-spacing:10px; font-weight:800; font-family:inherit; color:var(--ink); background:var(--cream);">
+    <div style="display:flex; gap:10px; margin-top:20px;">
+      <button class="btn btn-secondary" id="adminCancel">취소</button>
+      <button class="btn btn-primary" id="adminSubmit">확인</button>
+    </div>
+  </div>
+</div>
 <div class="edit-overlay" id="monthPickerOverlay">
   <div class="edit-modal" style="max-width:340px;">
     <div class="picker-title clickable" id="monthPickerYearBtn"></div>
@@ -797,6 +808,21 @@ let state = {
 };
 
 function defaultName(i){ return '플레이어' + (i+1); }
+
+const ADMIN_PIN = '1357';
+let isAdmin = false;
+
+function maskName(name){
+  if(!name) return name;
+  const s = String(name);
+  const len = s.length;
+  if(len <= 1) return s;
+  if(len === 2) return s[0] + '*';
+  return s[0] + '*'.repeat(len-2) + s[len-1];
+}
+function displayName(name){
+  return isAdmin ? name : maskName(name);
+}
 function playerName(i){ return (state.players[i] && state.players[i].trim()) ? state.players[i].trim() : defaultName(i); }
 
 function initScores(){
@@ -970,6 +996,10 @@ function bindEditModal(){
 
 let editNameCtx = null;
 function openEditName(groupNum, playerIdx){
+  if(!isAdmin){
+    showToast('관리자 인증 후 이름을 수정할 수 있어요 🛡️');
+    return;
+  }
   const rec = state.groupsData.find(r=>r.groupNum===groupNum);
   if(!rec) return;
   editNameCtx = { groupNum, playerIdx };
@@ -1017,6 +1047,38 @@ function bindEditNameModal(){
       showToast('저장에 실패했어요. 인터넷 연결을 확인해주세요.');
     }
   });
+}
+
+function openAdminModal(){
+  if(isAdmin){
+    showToast('이미 관리자 인증 상태입니다 🛡️');
+    return;
+  }
+  const input = document.getElementById('adminPinInput');
+  input.value = '';
+  document.getElementById('adminOverlay').classList.add('show');
+  setTimeout(()=> input.focus(), 50);
+}
+function closeAdminModal(){
+  document.getElementById('adminOverlay').classList.remove('show');
+}
+function bindAdminModal(){
+  document.getElementById('adminCancel').addEventListener('click', closeAdminModal);
+  const input = document.getElementById('adminPinInput');
+  const submit = ()=>{
+    if(input.value === ADMIN_PIN){
+      isAdmin = true;
+      closeAdminModal();
+      render();
+      showToast('관리자 인증 완료 ✅ 이름이 모두 표시됩니다');
+    } else {
+      showToast('비밀번호가 올바르지 않아요');
+      input.value = '';
+      input.focus();
+    }
+  };
+  document.getElementById('adminSubmit').addEventListener('click', submit);
+  input.addEventListener('keydown', e=>{ if(e.key === 'Enter') submit(); });
 }
 
 /* ---------- 월/연도 선택 모달 ---------- */
@@ -1122,7 +1184,7 @@ function bindPickerModals(){
 function renderGroupTable(rec){
   const secs = SECTION_LABELS[rec.holeType];
   let thead = `<tr><th></th>${rec.players.map((n,i)=>
-    `<th class="editable-name" data-group="${rec.groupNum}" data-p="${i}">${n}</th>`).join('')}</tr>`;
+    `<th class="${isAdmin?'editable-name':''}" data-group="${rec.groupNum}" data-p="${i}">${displayName(n)}</th>`).join('')}</tr>`;
   let tbody = '';
   secs.forEach(s=>{
     for(let h=0; h<9; h++){
@@ -1209,13 +1271,13 @@ function buildShareText(){
     state.aggregated.forEach((p, idx)=>{
       const medal = medals[p.rank] || `${p.rank}등`;
       const tie = (state.aggregated.filter(x=>x.rank===p.rank).length>1) ? '(공동)' : '';
-      text += `${medal}${tie} ${p.name} - ${p.total}타\n`;
+      text += `${medal}${tie} ${displayName(p.name)} - ${p.total}타\n`;
       if(tieAnn[idx]) text += `   (${tieAnn[idx]})\n`;
     });
   }
   text += `\n[조별 참여 현황]\n`;
   state.groupsData.forEach(rec=>{
-    text += `${rec.groupNum}조: ${rec.players.join(', ')} (${rec.holeType}홀)\n`;
+    text += `${rec.groupNum}조: ${rec.players.map(displayName).join(', ')} (${rec.holeType}홀)\n`;
   });
   return text;
 }
@@ -1490,7 +1552,7 @@ function renderStepResults(){
       <div class="rank-item ${p.rank===1?'first':''}">
         <div class="rank-medal" style="background:${medalColor[p.rank]||'#9AA79C'}">${medalIcon}</div>
         <div class="rank-info">
-          <div class="name">${tie?'공동 ':''}${p.rank}등 · ${p.name}</div>
+          <div class="name">${tie?'공동 ':''}${p.rank}등 · ${displayName(p.name)}</div>
           <div class="score">${p.groups.join(' · ')}</div>
           ${reasonLine}
         </div>
@@ -1526,7 +1588,10 @@ function renderStepResults(){
         <div class="share-hint">표의 타수 숫자를 누르면 바로 수정할 수 있어요 · 같은 날짜로 다른 조가 입력하면 순위가 자동으로 합산돼요</div>
       </div>
     </div>
-    <div class="fab-wrap"><button class="fab-share" id="shareBtn" title="결과 복사하기">📋</button></div>
+    <div class="fab-wrap">
+      <button class="fab-share" id="adminAuthBtn" style="right:90px; background:${isAdmin?'#F4B400':'var(--forest)'};" title="관리자 인증">${isAdmin?'🔓':'🛡️'}</button>
+      <button class="fab-share" id="shareBtn" title="결과 복사하기">📋</button>
+    </div>
     <div class="navbar">
       <button class="btn btn-secondary" id="goHome">🏠 처음 화면</button>
       <button class="btn btn-primary" id="addGroup">다른 조 입력</button>
@@ -1693,6 +1758,10 @@ function attachHandlers(){
   const shareBtn = document.getElementById('shareBtn');
   if(shareBtn){
     shareBtn.addEventListener('click', shareResult);
+    const adminAuthBtn = document.getElementById('adminAuthBtn');
+    if(adminAuthBtn){
+      adminAuthBtn.addEventListener('click', openAdminModal);
+    }
     const goHome = document.getElementById('goHome');
     if(goHome){
       goHome.addEventListener('click', ()=> goStep(1));
@@ -1737,6 +1806,7 @@ function attachHandlers(){
 bindEditModal();
 bindEditNameModal();
 bindPickerModals();
+bindAdminModal();
 render();
 refreshDatesWithData();
 </script>
