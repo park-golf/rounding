@@ -529,16 +529,6 @@
     justify-content:center;
   }
   .fab-share:active{ background:#e35a26; }
-  .delete-group-btn{
-    background:none;
-    border:none;
-    color:#E4572E;
-    font-size:13px;
-    font-weight:700;
-    cursor:pointer;
-    padding:6px 4px;
-  }
-  .delete-group-btn:active{ opacity:0.6; }
   .calendar-wrap{ width:100%; }
   .cal-toggle{
     display:flex;
@@ -721,7 +711,7 @@
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
   import {
-    getFirestore, collection, doc, setDoc, getDoc, getDocs, deleteDoc, query, where
+    getFirestore, collection, doc, setDoc, getDoc, getDocs, query, where
   } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
   const firebaseConfig = {
@@ -742,11 +732,6 @@
   window.__fbSaveGroup = async function(record){
     const id = `${record.date}_group${record.groupNum}`;
     await setDoc(doc(db, COL, id), record);
-  };
-
-  window.__fbDeleteGroup = async function(dateStr, groupNum){
-    const id = `${dateStr}_group${groupNum}`;
-    await deleteDoc(doc(db, COL, id));
   };
 
   window.__fbLoadGroups = async function(dateStr){
@@ -1375,21 +1360,6 @@ function hideNamesAgain(){
   render();
 }
 
-async function deleteActiveGroup(){
-  const groupNum = state.activeTab;
-  if(groupNum == null) return;
-  try{
-    await waitForFirebase();
-    await window.__fbDeleteGroup(state.date, groupNum);
-    showToast(`${groupNum}조 데이터가 삭제됐어요 🗑️`);
-  }catch(e){
-    console.error(e);
-    showToast('삭제에 실패했어요. 인터넷 연결을 확인해주세요.');
-    return;
-  }
-  state.activeTab = null;
-  await refreshResults();
-}
 
 async function goToResults(){
   await saveGroupData();
@@ -1662,10 +1632,6 @@ function renderStepResults(){
     maskBtnIcon = '🙉'; maskBtnTitle = '다시 숨기기'; maskBtnBg = '#F4B400';
   }
 
-  const deleteBtnHtml = (state.activeTab != null)
-    ? `<button id="deleteGroupBtn" data-group="${state.activeTab}" class="delete-group-btn">🗑️ ${state.activeTab}조 삭제</button>`
-    : '';
-
   return `
     ${renderHeader(formatDateTitle())}
     <div class="content">
@@ -1675,10 +1641,7 @@ function renderStepResults(){
         <button class="btn btn-secondary" id="refreshBtn" style="width:100%; height:46px; font-size:15px;">🔄 최신 데이터 새로고침</button>
       </div>
       <div class="card">
-        <div class="section-title" style="display:flex; justify-content:space-between; align-items:center;">
-          <span>📋 조별 상세 스코어표</span>
-          ${deleteBtnHtml}
-        </div>
+        <div class="section-title">📋 조별 상세 스코어표</div>
         ${tabsHtml}
         ${tableHtml}
         <div class="share-hint">표의 타수 숫자를 누르면 바로 수정할 수 있어요 · 같은 날짜로 다른 조가 입력하면 순위가 자동으로 합산돼요</div>
@@ -1865,14 +1828,6 @@ function attachHandlers(){
         } else {
           hideNamesAgain();
         }
-      });
-    }
-    const deleteGroupBtn = document.getElementById('deleteGroupBtn');
-    if(deleteGroupBtn){
-      deleteGroupBtn.addEventListener('click', ()=>{
-        const groupNum = deleteGroupBtn.dataset.group;
-        if(!confirm(`${groupNum}조 데이터를 삭제하시겠습니까?\n삭제하면 되돌릴 수 없어요.`)) return;
-        openAdminModal(deleteActiveGroup);
       });
     }
     const goHome = document.getElementById('goHome');
