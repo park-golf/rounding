@@ -529,6 +529,16 @@
     justify-content:center;
   }
   .fab-share:active{ background:#e35a26; }
+  .delete-group-btn{
+    background:none;
+    border:none;
+    color:#E4572E;
+    font-size:13px;
+    font-weight:700;
+    cursor:pointer;
+    padding:6px 4px;
+  }
+  .delete-group-btn:active{ opacity:0.6; }
   .calendar-wrap{ width:100%; }
   .cal-toggle{
     display:flex;
@@ -711,7 +721,7 @@
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
   import {
-    getFirestore, collection, doc, setDoc, getDocs, query, where
+    getFirestore, collection, doc, setDoc, getDoc, getDocs, deleteDoc, query, where
   } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
   const firebaseConfig = {
@@ -727,10 +737,16 @@
   const app = initializeApp(firebaseConfig);
   const db = getFirestore(app);
   const COL = 'pg_groups';
+  const SETTINGS_COL = 'pg_date_settings';
 
   window.__fbSaveGroup = async function(record){
     const id = `${record.date}_group${record.groupNum}`;
     await setDoc(doc(db, COL, id), record);
+  };
+
+  window.__fbDeleteGroup = async function(dateStr, groupNum){
+    const id = `${dateStr}_group${groupNum}`;
+    await deleteDoc(doc(db, COL, id));
   };
 
   window.__fbLoadGroups = async function(dateStr){
@@ -750,6 +766,15 @@
       if(data && data.date) set.add(data.date);
     });
     return Array.from(set);
+  };
+
+  window.__fbSetDateMasked = async function(dateStr, masked){
+    await setDoc(doc(db, SETTINGS_COL, dateStr), { masked });
+  };
+
+  window.__fbGetDateSettings = async function(dateStr){
+    const snap = await getDoc(doc(db, SETTINGS_COL, dateStr));
+    return snap.exists() ? snap.data() : null;
   };
 
   window.__fbReady = true;
@@ -804,13 +829,15 @@ let state = {
   calendarYear: parseInt(todayISO().split('-')[0], 10),
   calendarMonth: parseInt(todayISO().split('-')[1], 10) - 1,
   pickerYear: parseInt(todayISO().split('-')[0], 10),
-  yearBlockStart: parseInt(todayISO().split('-')[0], 10) - 5
+  yearBlockStart: parseInt(todayISO().split('-')[0], 10) - 5,
+  dateMasked: false,
+  tempReveal: false
 };
 
 function defaultName(i){ return '플레이어' + (i+1); }
 
 const ADMIN_PIN = '1357';
-let isAdmin = false;
+let adminCallback = null; // 인증 성공 시 실행할 동작
 
 function maskName(name){
   if(!name) return name;
@@ -821,7 +848,8 @@ function maskName(name){
   return s[0] + '*'.repeat(len-2) + s[len-1];
 }
 function displayName(name){
-  return isAdmin ? name : maskName(name);
+  const hidden = state.dateMasked && !state.tempReveal;
+  return hidden ? maskName(name) : name;
 }
 function playerName(i){ return (state.players[i] && state.players[i].trim()) ? state.players[i].trim() : defaultName(i); }
 
@@ -996,10 +1024,9 @@ function bindEditModal(){
 
 let editNameCtx = null;
 function openEditName(groupNum, playerIdx){
-  if(!isAdmin){
-    showToast('관리자 인증 후 이름을 수정할 수 있어요 🛡️');
-    return;
-  }
+  openAdminModal(()=> reallyOpenEditName(groupNum, playerIdx));
+}
+function reallyOpenEditName(groupNum, playerIdx){
   const rec = state.groupsData.find(r=>r.groupNum===groupNum);
   if(!rec) return;
   editNameCtx = { groupNum, playerIdx };
@@ -1049,17 +1076,15 @@ function bindEditNameModal(){
   });
 }
 
-function openAdminModal(){
-  if(isAdmin){
-    showToast('이미 관리자 인증 상태입니다 🛡️');
-    return;
-  }
+function openAdminModal(onSuccess){
+  adminCallback = onSuccess;
   const input = document.getElementById('adminPinInput');
   input.value = '';
   document.getElementById('adminOverlay').classList.add('show');
   setTimeout(()=> input.focus(), 50);
 }
 function closeAdminModal(){
+  adminCallback = null;
   document.getElementById('adminOverlay').classList.remove('show');
 }
 function bindAdminModal(){
@@ -1067,10 +1092,9 @@ function bindAdminModal(){
   const input = document.getElementById('adminPinInput');
   const submit = ()=>{
     if(input.value === ADMIN_PIN){
-      isAdmin = true;
+      const cb = adminCallback;
       closeAdminModal();
-      render();
-      showToast('관리자 인증 완료 ✅ 이름이 모두 표시됩니다');
+      if(cb) cb();
     } else {
       showToast('비밀번호가 올바르지 않아요');
       input.value = '';
@@ -1184,7 +1208,7 @@ function bindPickerModals(){
 function renderGroupTable(rec){
   const secs = SECTION_LABELS[rec.holeType];
   let thead = `<tr><th></th>${rec.players.map((n,i)=>
-    `<th class="${isAdmin?'editable-name':''}" data-group="${rec.groupNum}" data-p="${i}">${displayName(n)}</th>`).join('')}</tr>`;
+    `<th class="editable-name" data-group="${rec.groupNum}" data-p="${i}">${displayName(n)}</th>`).join('')}</tr>`;
   let tbody = '';
   secs.forEach(s=>{
     for(let h=0; h<9; h++){
@@ -1312,11 +1336,67 @@ async function refreshDatesWithData(){
   }catch(e){ console.error(e); }
 }
 
+async function loadDateMaskState(){
+  await waitForFirebase();
+  state.tempReveal = false;
+  if(!window.__fbGetDateSettings){ state.dateMasked = false; return; }
+  try{
+    const settings = await window.__fbGetDateSettings(state.date);
+    state.dateMasked = !!(settings && settings.masked);
+  }catch(e){
+    console.error(e);
+    state.dateMasked = false;
+  }
+}
+
+async function turnMaskingOn(){
+  try{
+    await waitForFirebase();
+    await window.__fbSetDateMasked(state.date, true);
+  }catch(e){
+    console.error(e);
+    showToast('저장 중 문제가 발생했어요. 인터넷 연결을 확인해주세요.');
+    return;
+  }
+  state.dateMasked = true;
+  state.tempReveal = false;
+  render();
+  showToast('이 날짜는 이제부터 이름이 마스킹돼요 🙈');
+}
+
+function revealNamesTemporarily(){
+  state.tempReveal = true;
+  render();
+  showToast('이름이 임시로 보여요 👁️ (다시 누르면 숨겨요)');
+}
+
+function hideNamesAgain(){
+  state.tempReveal = false;
+  render();
+}
+
+async function deleteActiveGroup(){
+  const groupNum = state.activeTab;
+  if(groupNum == null) return;
+  try{
+    await waitForFirebase();
+    await window.__fbDeleteGroup(state.date, groupNum);
+    showToast(`${groupNum}조 데이터가 삭제됐어요 🗑️`);
+  }catch(e){
+    console.error(e);
+    showToast('삭제에 실패했어요. 인터넷 연결을 확인해주세요.');
+    return;
+  }
+  state.activeTab = null;
+  await refreshResults();
+}
+
 async function goToResults(){
   await saveGroupData();
   state.step = 7;
   state.resultsLoading = true;
   render();
+  await loadDateMaskState();
   await refreshResults(true);
   window.scrollTo(0,0);
 }
@@ -1573,6 +1653,19 @@ function renderStepResults(){
     tableHtml = `<div class="empty-note">표시할 조별 데이터가 없어요.</div>`;
   }
 
+  let maskBtnIcon, maskBtnTitle, maskBtnBg;
+  if(!state.dateMasked){
+    maskBtnIcon = '🙈'; maskBtnTitle = '이 날짜 이름 마스킹 하기'; maskBtnBg = 'var(--forest)';
+  } else if(!state.tempReveal){
+    maskBtnIcon = '👁️'; maskBtnTitle = '이름 임시로 보기'; maskBtnBg = 'var(--forest)';
+  } else {
+    maskBtnIcon = '🙉'; maskBtnTitle = '다시 숨기기'; maskBtnBg = '#F4B400';
+  }
+
+  const deleteBtnHtml = (state.activeTab != null)
+    ? `<button id="deleteGroupBtn" data-group="${state.activeTab}" class="delete-group-btn">🗑️ ${state.activeTab}조 삭제</button>`
+    : '';
+
   return `
     ${renderHeader(formatDateTitle())}
     <div class="content">
@@ -1582,14 +1675,17 @@ function renderStepResults(){
         <button class="btn btn-secondary" id="refreshBtn" style="width:100%; height:46px; font-size:15px;">🔄 최신 데이터 새로고침</button>
       </div>
       <div class="card">
-        <div class="section-title">📋 조별 상세 스코어표</div>
+        <div class="section-title" style="display:flex; justify-content:space-between; align-items:center;">
+          <span>📋 조별 상세 스코어표</span>
+          ${deleteBtnHtml}
+        </div>
         ${tabsHtml}
         ${tableHtml}
         <div class="share-hint">표의 타수 숫자를 누르면 바로 수정할 수 있어요 · 같은 날짜로 다른 조가 입력하면 순위가 자동으로 합산돼요</div>
       </div>
     </div>
     <div class="fab-wrap">
-      <button class="fab-share" id="adminAuthBtn" style="right:90px; background:${isAdmin?'#F4B400':'var(--forest)'};" title="관리자 인증">${isAdmin?'🔓':'🛡️'}</button>
+      <button class="fab-share" id="maskToggleBtn" style="right:90px; background:${maskBtnBg};" title="${maskBtnTitle}">${maskBtnIcon}</button>
       <button class="fab-share" id="shareBtn" title="결과 복사하기">📋</button>
     </div>
     <div class="navbar">
@@ -1648,6 +1744,7 @@ function attachHandlers(){
         state.step = 7;
         state.resultsLoading = true;
         render();
+        await loadDateMaskState();
         await refreshResults(true);
         window.scrollTo(0,0);
       });
@@ -1758,9 +1855,25 @@ function attachHandlers(){
   const shareBtn = document.getElementById('shareBtn');
   if(shareBtn){
     shareBtn.addEventListener('click', shareResult);
-    const adminAuthBtn = document.getElementById('adminAuthBtn');
-    if(adminAuthBtn){
-      adminAuthBtn.addEventListener('click', openAdminModal);
+    const maskToggleBtn = document.getElementById('maskToggleBtn');
+    if(maskToggleBtn){
+      maskToggleBtn.addEventListener('click', ()=>{
+        if(!state.dateMasked){
+          openAdminModal(turnMaskingOn);
+        } else if(!state.tempReveal){
+          openAdminModal(revealNamesTemporarily);
+        } else {
+          hideNamesAgain();
+        }
+      });
+    }
+    const deleteGroupBtn = document.getElementById('deleteGroupBtn');
+    if(deleteGroupBtn){
+      deleteGroupBtn.addEventListener('click', ()=>{
+        const groupNum = deleteGroupBtn.dataset.group;
+        if(!confirm(`${groupNum}조 데이터를 삭제하시겠습니까?\n삭제하면 되돌릴 수 없어요.`)) return;
+        openAdminModal(deleteActiveGroup);
+      });
     }
     const goHome = document.getElementById('goHome');
     if(goHome){
